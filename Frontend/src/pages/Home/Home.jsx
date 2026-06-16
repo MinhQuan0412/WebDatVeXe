@@ -59,7 +59,7 @@ const Home = () => {
                 <span className="distance">{route.khoangCach} - {route.thoiGian}</span>
               </div>
               <div className="route-item-right">
-                <span className="price">{route.giaVe?.toLocaleString('vi-VN')}đ</span>
+                <span className="price">{Number(String(route.giaVe || 0).replace(/[^0-9]/g, '')).toLocaleString('vi-VN')} đ</span>
               </div>
             </div>
           )) : (

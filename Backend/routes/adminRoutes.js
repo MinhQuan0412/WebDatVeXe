@@ -171,7 +171,7 @@ router.post('/login', async (req, res) => {
     if (!isMatch) return res.status(401).json({ message: 'Số điện thoại hoặc mật khẩu không chính xác' });
 
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
-    res.json({ token, user: { id: user._id, hoTen: user.hoTen, soDienThoai: user.soDienThoai } });
+    res.json({ token, user: { id: user._id, hoTen: user.hoTen, soDienThoai: user.soDienThoai, vaiTro: user.vaiTro } });
   } catch (err) {
     res.status(500).json({ message: 'Lỗi đăng nhập', error: err.message });
   }

@@ -1,5 +1,5 @@
 import { io } from 'socket.io-client';
-import { API_BASE_URL } from '../config';
+import { API_BASE_URL } from '../api/config';
 
 // Khởi tạo kết nối Socket.io kết nối đến Backend
 const socket = io(API_BASE_URL, {

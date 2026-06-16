@@ -307,8 +307,7 @@ router.get('/:id', async (req, res) => {
         tenDiem: `${d.tenDiem} (${d.diaChi || 'Đang cập nhật'})`
     }));
 
-    console.log(`[TRIP-DETAIL] Chuyến ${trip.maChuyenXe}: Đã nối địa chỉ chi tiết cho ${rawDiemDon.length} điểm đón`);
-    
+    // console.log(`[TRIP-DETAIL] Chuyến ${trip.maChuyenXe}: Đã nối địa chỉ chi tiết cho ${rawDiemDon.length} điểm đón`);
     res.json(tripObj);
   } catch (err) {
     res.status(500).json({ message: 'Lỗi lấy thông tin ghế', error: err.message });

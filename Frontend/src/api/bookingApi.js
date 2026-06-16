@@ -5,9 +5,9 @@ const bookingApi = {
   getRoutes: () => axiosClient.get('/api/routes'),
   getRouteDetail: (id) => axiosClient.get(`/api/routes/${id}`),
   searchTrips: (params) => axiosClient.get('/api/trips/search', { params }),
-  
-  /** Lấy chi tiết chuyến xe: gheDaDat, diemDon, diemTra */
   getTripDetail: (id) => axiosClient.get(`/api/trips/${id}`),
+  
+   
   
   // --- BOOKINGS ---
   /** Giữ chỗ: { chuyenXeId, danhSachGhe, hoTen, soDienThoai, email, diemDon, diemTra, tongTien } */
