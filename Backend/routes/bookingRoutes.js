@@ -62,60 +62,60 @@ router.post('/hold-seats', authMiddleware, async (req, res) => {
       trangThai: 'hold',
       holdExpires: { $lt: now }
     });
-    
+
     if (expiredHolds.length > 0) {
-        const expiredSeats = expiredHolds.flatMap(h => h.danhSachGhe);
-        await ChuyenXe.findByIdAndUpdate(chuyenXeId, {
-            $pull: { gheDaDat: { $in: expiredSeats } }
+      const expiredSeats = expiredHolds.flatMap(h => h.danhSachGhe);
+      await ChuyenXe.findByIdAndUpdate(chuyenXeId, {
+        $pull: { gheDaDat: { $in: expiredSeats } }
+      });
+      await Ve.updateMany(
+        { _id: { $in: expiredHolds.map(h => h._id) } },
+        { trangThai: 'cancelled', ghiChu: '[Hệ thống: Tự động hủy do hết hạn 10 phút]' }
+      );
+      const io = req.app.get('io');
+      if (io) {
+        // Lấy lại trip để lấy ghế mới nhất, hoặc tự trừ mảng
+        const currentTrip = await ChuyenXe.findById(chuyenXeId);
+        io.to(chuyenXeId).emit('seatsUpdated', {
+          chuyenXeId,
+          bookedSeats: currentTrip ? currentTrip.gheDaDat : []
         });
-        await Ve.updateMany(
-            { _id: { $in: expiredHolds.map(h => h._id) } },
-            { trangThai: 'cancelled', ghiChu: '[Hệ thống: Tự động hủy do hết hạn 10 phút]' }
-        );
-        const io = req.app.get('io');
-        if (io) {
-            // Lấy lại trip để lấy ghế mới nhất, hoặc tự trừ mảng
-            const currentTrip = await ChuyenXe.findById(chuyenXeId);
-            io.to(chuyenXeId).emit('seatsUpdated', {
-                chuyenXeId,
-                bookedSeats: currentTrip ? currentTrip.gheDaDat : []
-            });
-        }
+      }
     }
 
     // THUẬT TOÁN CHỐNG TRANH CHẤP GHẾ (ATOMIC UPDATE):
     // Cố gắng thêm ghế vào danh sách gheDaDat chỉ khi toàn bộ ghế đó chưa tồn tại
     const updatedTrip = await ChuyenXe.findOneAndUpdate(
-        { 
-            _id: chuyenXeId, 
-            gheDaDat: { $nin: danhSachGhe }, // Điều kiện: Không ghế nào trong danh sách bị trùng
-            trangThai: 'active'
-        },
-        { $push: { gheDaDat: { $each: danhSachGhe } } },
-        { new: true }
+      {
+        _id: chuyenXeId,
+        gheDaDat: { $nin: danhSachGhe }, // Điều kiện: Không ghế nào trong danh sách bị trùng
+        trangThai: 'active'
+      },
+      { $push: { gheDaDat: { $each: danhSachGhe } } },
+      { new: true }
     );
 
     if (!updatedTrip) {
-        return res.status(400).json({ 
-            message: 'Ghế bạn chọn vừa có người khác đặt hoặc đang được giữ chỗ. Vui lòng chọn ghế khác!' 
-        });
+      return res.status(400).json({
+        message: 'Ghế bạn chọn vừa có người khác đặt hoặc đang được giữ chỗ. Vui lòng chọn ghế khác!'
+      });
     }
 
     const io = req.app.get('io');
     if (io) {
-        io.to(chuyenXeId).emit('seatsUpdated', {
-            chuyenXeId: chuyenXeId,
-            bookedSeats: updatedTrip.gheDaDat
-        });
+      io.to(chuyenXeId).emit('seatsUpdated', {
+        chuyenXeId: chuyenXeId,
+        bookedSeats: updatedTrip.gheDaDat
+      });
     }
 
     // Lấy giá vé từ Tuyến xe và tính tổng tiền
     const giaVeStr = trip.tuyenXeId.giaVe || "0";
     const giaVeNum = parseInt(giaVeStr.replace(/\D/g, '')) || 0;
     const tongTien = giaVeNum * danhSachGhe.length;
-    
+
     // QUY TẮC: Giữ ghế trong 10 phút
-    const holdExpires = new Date(Date.now() + 10 * 60 * 1000); 
+    const holdExpires = new Date(Date.now() + 10 * 60 * 1000);
 
     // Xử lý Voucher (nếu có) - ĐỒNG BỘ LOGIC CHẶT CHẼ
     let soTienGiam = 0;
@@ -123,57 +123,57 @@ router.post('/hold-seats', authMiddleware, async (req, res) => {
     let voucherIdApplied = null;
 
     if (req.body.maVoucher) {
-        console.log(`[BOOKING] Đang áp dụng Voucher: ${req.body.maVoucher} cho đơn hàng ${tongTien}đ`);
-        const v = await Voucher.findOne({ maVoucher: req.body.maVoucher.toUpperCase(), trangThai: 'active' });
-        
-        if (v) {
-            const now = new Date();
-            let isValid = true;
+      console.log(`[BOOKING] Đang áp dụng Voucher: ${req.body.maVoucher} cho đơn hàng ${tongTien}đ`);
+      const v = await Voucher.findOne({ maVoucher: req.body.maVoucher.toUpperCase(), trangThai: 'active' });
 
-            // Kiểm tra ngày & số lượng
-            if (v.ngayBatDau && v.ngayBatDau > now) isValid = false;
-            if (v.ngayHetHan && v.ngayHetHan < now) isValid = false;
-            if (v.daSuDung >= v.soLuong) isValid = false;
-            if (tongTien < v.giaTriToiThieu) isValid = false;
+      if (v) {
+        const now = new Date();
+        let isValid = true;
 
-            // Kiểm tra khách mới
-            if (isValid && v.choKhachHangMoi) {
-                const count = await Ve.countDocuments({ khachHangId: req.user._id, trangThai: { $in: ['paid', 'confirmed', 'completed'] } });
-                if (count > 0) isValid = false;
-            }
+        // Kiểm tra ngày & số lượng
+        if (v.ngayBatDau && v.ngayBatDau > now) isValid = false;
+        if (v.ngayHetHan && v.ngayHetHan < now) isValid = false;
+        if (v.daSuDung >= v.soLuong) isValid = false;
+        if (tongTien < v.giaTriToiThieu) isValid = false;
 
-            if (isValid) {
-                if (v.loaiGiamGia === 'fixed') {
-                    soTienGiam = v.giaTriGiam;
-                } else {
-                    soTienGiam = (tongTien * v.giaTriGiam) / 100;
-                    if (v.giamToiDa && soTienGiam > v.giamToiDa) soTienGiam = v.giamToiDa;
-                }
-                maVoucherApplied = v.maVoucher;
-                voucherIdApplied = v._id;
-                console.log(`[BOOKING] Áp dụng thành công! Giảm: ${soTienGiam}đ. Tiền cuối: ${tongTien - soTienGiam}đ`);
-            } else {
-                console.log(`[BOOKING] Voucher ${req.body.maVoucher} không đủ điều kiện áp dụng lúc này.`);
-            }
-        } else {
-            console.log(`[BOOKING] Không tìm thấy Voucher: ${req.body.maVoucher}`);
+        // Kiểm tra khách mới
+        if (isValid && v.choKhachHangMoi) {
+          const count = await Ve.countDocuments({ khachHangId: req.user._id, trangThai: { $in: ['paid', 'confirmed', 'completed'] } });
+          if (count > 0) isValid = false;
         }
+
+        if (isValid) {
+          if (v.loaiGiamGia === 'fixed') {
+            soTienGiam = v.giaTriGiam;
+          } else {
+            soTienGiam = (tongTien * v.giaTriGiam) / 100;
+            if (v.giamToiDa && soTienGiam > v.giamToiDa) soTienGiam = v.giamToiDa;
+          }
+          maVoucherApplied = v.maVoucher;
+          voucherIdApplied = v._id;
+          console.log(`[BOOKING] Áp dụng thành công! Giảm: ${soTienGiam}đ. Tiền cuối: ${tongTien - soTienGiam}đ`);
+        } else {
+          console.log(`[BOOKING] Voucher ${req.body.maVoucher} không đủ điều kiện áp dụng lúc này.`);
+        }
+      } else {
+        console.log(`[BOOKING] Không tìm thấy Voucher: ${req.body.maVoucher}`);
+      }
     }
 
     const generateMaVe = () => 'VE-' + Date.now();
     const maVe = await generateMaVe();
     // ✅ Tự động tìm địa chỉ chi tiết cho điểm đón/trả (Thông minh hơn)
     const findStopDetails = (name, stops) => {
-        if (!name || !stops) return { tenDiem: name || 'Chưa xác định' };
-        const nameStr = (typeof name === 'string' ? name : name.tenDiem)?.toLowerCase();
-        
-        // Tìm chính xác hoặc tìm gần đúng (chứa trong tên)
-        const stop = stops.find(s => 
-            s.tenDiem?.toLowerCase() === nameStr || 
-            s.tenDiem?.toLowerCase().includes(nameStr) ||
-            nameStr?.includes(s.tenDiem?.toLowerCase())
-        );
-        return stop ? { tenDiem: stop.tenDiem, diaChi: stop.diaChi, thoiGian: stop.thoiGian } : { tenDiem: name };
+      if (!name || !stops) return { tenDiem: name || 'Chưa xác định' };
+      const nameStr = (typeof name === 'string' ? name : name.tenDiem)?.toLowerCase();
+
+      // Tìm chính xác hoặc tìm gần đúng (chứa trong tên)
+      const stop = stops.find(s =>
+        s.tenDiem?.toLowerCase() === nameStr ||
+        s.tenDiem?.toLowerCase().includes(nameStr) ||
+        nameStr?.includes(s.tenDiem?.toLowerCase())
+      );
+      return stop ? { tenDiem: stop.tenDiem, diaChi: stop.diaChi, thoiGian: stop.thoiGian } : { tenDiem: name };
     };
 
     const stopsDon = trip.diemDon?.length ? trip.diemDon : (trip.tuyenXeId?.diemDon || []);
@@ -225,14 +225,14 @@ router.get('/search-by-code', async (req, res) => {
 
     console.log(`[SEARCH-BY-CODE] Đang tra cứu mã: "${maVe}"`);
 
-    const booking = await Ve.findOne({ 
-        maVe: { $regex: new RegExp(`^${maVe}$`, 'i') } 
+    const booking = await Ve.findOne({
+      maVe: { $regex: new RegExp(`^${maVe}$`, 'i') }
     })
       .populate({
         path: 'chuyenXeId',
         populate: [
-            { path: 'tuyenXeId' },
-            { path: 'xeId' }
+          { path: 'tuyenXeId' },
+          { path: 'xeId' }
         ]
       })
       .populate('khachHangId', 'hoTen soDienThoai email');
@@ -252,16 +252,16 @@ router.get('/detail/:maVe', async (req, res) => {
   try {
     const rawCode = req.params.maVe;
     console.log(`[LOOKUP] Đang tìm kiếm mã vé: "${rawCode}"`);
-    
+
     // Tìm kiếm không phân biệt hoa thường và linh hoạt hơn
-    const booking = await Ve.findOne({ 
-        maVe: { $regex: new RegExp(`^${rawCode.trim()}$`, 'i') } 
+    const booking = await Ve.findOne({
+      maVe: { $regex: new RegExp(`^${rawCode.trim()}$`, 'i') }
     })
       .populate({
         path: 'chuyenXeId',
         populate: [
-            { path: 'tuyenXeId' },
-            { path: 'xeId' }
+          { path: 'tuyenXeId' },
+          { path: 'xeId' }
         ]
       })
       .populate('khachHangId', 'hoTen soDienThoai email');
@@ -350,7 +350,7 @@ router.get('/my-invoices', authMiddleware, async (req, res) => {
         populate: { path: 'chuyenXeId', populate: { path: 'tuyenXeId' } }
       })
       .sort({ createdAt: -1 });
-      
+
     res.json(invoices);
   } catch (err) {
     res.status(500).json({ message: 'Lỗi lấy danh sách hóa đơn', error: err.message });
@@ -398,11 +398,11 @@ router.post('/', authMiddleware, async (req, res) => {
 
     // VALIDATE THÔNG TIN LIÊN HỆ
     if (!soDienThoai && !req.user.soDienThoai) {
-        return res.status(400).json({ message: 'Vui lòng cung cấp số điện thoại liên hệ' });
+      return res.status(400).json({ message: 'Vui lòng cung cấp số điện thoại liên hệ' });
     }
-    
+
     if (soDienThoai && !/^(0[3|5|7|8|9])+([0-9]{8})$/.test(soDienThoai)) {
-        return res.status(400).json({ message: 'Số điện thoại không hợp lệ (Phải là số ĐT Việt Nam)' });
+      return res.status(400).json({ message: 'Số điện thoại không hợp lệ (Phải là số ĐT Việt Nam)' });
     }
     if (!mongoose.Types.ObjectId.isValid(chuyenXeId)) {
       return res.status(400).json({ message: 'ID chuyến xe không hợp lệ' });
@@ -486,28 +486,28 @@ router.post('/', authMiddleware, async (req, res) => {
     // Case 2: Đặt vé trực tiếp không qua hold
     // THUẬT TOÁN CHỐNG TRANH CHẤP GHẾ (ATOMIC UPDATE)
     const updatedTrip = await ChuyenXe.findOneAndUpdate(
-        { 
-            _id: chuyenXeId, 
-            gheDaDat: { $nin: danhSachGhe }, // Điều kiện: Không ghế nào trong danh sách bị trùng
-            trangThai: 'active'
-        },
-        { $push: { gheDaDat: { $each: danhSachGhe } } },
-        { new: true }
+      {
+        _id: chuyenXeId,
+        gheDaDat: { $nin: danhSachGhe }, // Điều kiện: Không ghế nào trong danh sách bị trùng
+        trangThai: 'active'
+      },
+      { $push: { gheDaDat: { $each: danhSachGhe } } },
+      { new: true }
     );
 
     if (!updatedTrip) {
-        return res.status(400).json({ 
-            message: 'Ghế bạn chọn vừa có người khác đặt hoặc đang được giữ chỗ. Vui lòng chọn ghế khác!' 
-        });
+      return res.status(400).json({
+        message: 'Ghế bạn chọn vừa có người khác đặt hoặc đang được giữ chỗ. Vui lòng chọn ghế khác!'
+      });
     }
 
     // Bắn sự kiện socket cập nhật lại toàn bộ ghế
     const io = req.app.get('io');
     if (io) {
-        io.to(chuyenXeId).emit('seatsUpdated', {
-            chuyenXeId: chuyenXeId,
-            bookedSeats: updatedTrip.gheDaDat
-        });
+      io.to(chuyenXeId).emit('seatsUpdated', {
+        chuyenXeId: chuyenXeId,
+        bookedSeats: updatedTrip.gheDaDat
+      });
     }
 
     const tongTien = updatedTrip.giaVe * danhSachGhe.length;
@@ -559,9 +559,9 @@ router.get('/:bookingId', authMiddleware, async (req, res) => {
   try {
     let query;
     if (mongoose.Types.ObjectId.isValid(req.params.bookingId)) {
-        query = Ve.findById(req.params.bookingId);
+      query = Ve.findById(req.params.bookingId);
     } else {
-        query = Ve.findOne({ maVe: req.params.bookingId });
+      query = Ve.findOne({ maVe: req.params.bookingId });
     }
 
     const booking = await query
@@ -612,10 +612,10 @@ router.put('/:bookingId/pickup-dropoff', authMiddleware, async (req, res) => {
     const stopsTra = trip.diemTra?.length ? trip.diemTra : (trip.tuyenXeId?.diemTra || []);
 
     const findStopDetails = (name, stops) => {
-        if (!name || !stops) return { tenDiem: name };
-        const nameStr = typeof name === 'string' ? name : name.tenDiem;
-        const stop = stops.find(s => s.tenDiem?.toLowerCase() === nameStr?.toLowerCase());
-        return stop ? { tenDiem: stop.tenDiem, diaChi: stop.diaChi, thoiGian: stop.thoiGian } : { tenDiem: nameStr };
+      if (!name || !stops) return { tenDiem: name };
+      const nameStr = typeof name === 'string' ? name : name.tenDiem;
+      const stop = stops.find(s => s.tenDiem?.toLowerCase() === nameStr?.toLowerCase());
+      return stop ? { tenDiem: stop.tenDiem, diaChi: stop.diaChi, thoiGian: stop.thoiGian } : { tenDiem: nameStr };
     };
 
     if (diemDon) {
@@ -673,7 +673,7 @@ router.post('/:bookingId/pay', authMiddleware, async (req, res) => {
 
     // Tăng lượt sử dụng voucher nếu có
     if (booking.voucherId) {
-        await Voucher.findByIdAndUpdate(booking.voucherId, { $inc: { daSuDung: 1 } });
+      await Voucher.findByIdAndUpdate(booking.voucherId, { $inc: { daSuDung: 1 } });
     }
 
     // Tạo hóa đơn
@@ -688,39 +688,39 @@ router.post('/:bookingId/pay', authMiddleware, async (req, res) => {
 
     // ✅ TẠO FILE PDF VÉ XE VÀ GỬI EMAIL XÁC NHẬN
     try {
-        const trip = await ChuyenXe.findById(booking.chuyenXeId).populate('tuyenXeId');
-        const PDFDocument = require('pdfkit');
-        
-        // Tạo buffer để chứa PDF
-        const chunks = [];
-        const doc = new PDFDocument({ margin: 50 });
-        
-        doc.on('data', chunk => chunks.push(chunk));
-        
-        // Nội dung PDF (Sử dụng font chuẩn, lưu ý tiếng Việt có thể cần font riêng nếu muốn đẹp hơn)
-        doc.fontSize(25).text('VE XE KHACH BLUEBUS', { align: 'center' });
-        doc.moveDown();
-        doc.fontSize(16).text(`Ma ve: ${booking.maVe}`);
-        doc.text(`Ho ten: ${booking.hoTen}`);
-        doc.text(`So dien thoai: ${booking.soDienThoai}`);
-        doc.text(`Tuyen duong: ${trip.tuyenXeId.diemDi} - ${trip.tuyenXeId.diemDen}`);
-        doc.text(`Ngay khoi hanh: ${new Date(trip.thoiGianKhoiHanh).toLocaleString('vi-VN')}`);
-        doc.text(`So ghe: ${booking.danhSachGhe.join(', ')}`);
-        doc.text(`Tong tien: ${booking.tongTien.toLocaleString()} VND`);
-        doc.moveDown();
-        doc.fontSize(12).text('Cam on quy khach da su dung dich vu cua BlueBus!', { align: 'center', italic: true });
-        
-        doc.end();
+      const trip = await ChuyenXe.findById(booking.chuyenXeId).populate('tuyenXeId');
+      const PDFDocument = require('pdfkit');
 
-        // Đợi PDF tạo xong
-        const pdfBuffer = await new Promise((resolve) => {
-            doc.on('end', () => resolve(Buffer.concat(chunks)));
-        });
+      // Tạo buffer để chứa PDF
+      const chunks = [];
+      const doc = new PDFDocument({ margin: 50 });
 
-        await sendEmail({
-            email: booking.email || req.user.email,
-            subject: `[BlueBus] Xác nhận đặt vé thành công - Mã vé: ${booking.maVe}`,
-            html: `
+      doc.on('data', chunk => chunks.push(chunk));
+
+      // Nội dung PDF (Sử dụng font chuẩn, lưu ý tiếng Việt có thể cần font riêng nếu muốn đẹp hơn)
+      doc.fontSize(25).text('VE XE KHACH BLUEBUS', { align: 'center' });
+      doc.moveDown();
+      doc.fontSize(16).text(`Ma ve: ${booking.maVe}`);
+      doc.text(`Ho ten: ${booking.hoTen}`);
+      doc.text(`So dien thoai: ${booking.soDienThoai}`);
+      doc.text(`Tuyen duong: ${trip.tuyenXeId.diemDi} - ${trip.tuyenXeId.diemDen}`);
+      doc.text(`Ngay khoi hanh: ${new Date(trip.thoiGianKhoiHanh).toLocaleString('vi-VN')}`);
+      doc.text(`So ghe: ${booking.danhSachGhe.join(', ')}`);
+      doc.text(`Tong tien: ${booking.tongTien.toLocaleString()} VND`);
+      doc.moveDown();
+      doc.fontSize(12).text('Cam on quy khach da su dung dich vu cua BlueBus!', { align: 'center', italic: true });
+
+      doc.end();
+
+      // Đợi PDF tạo xong
+      const pdfBuffer = await new Promise((resolve) => {
+        doc.on('end', () => resolve(Buffer.concat(chunks)));
+      });
+
+      await sendEmail({
+        email: booking.email || req.user.email,
+        subject: `[BlueBus] Xác nhận đặt vé thành công - Mã vé: ${booking.maVe}`,
+        html: `
                 <div style="font-family: Arial, sans-serif; border: 1px solid #ef5222; padding: 20px; border-radius: 10px; max-width: 600px; margin: auto;">
                     <h2 style="color: #ef5222;">BLUE BUS - XÁC NHẬN ĐẶT VÉ</h2>
                     <p>Chào <b>${booking.hoTen}</b>,</p>
@@ -731,16 +731,16 @@ router.post('/:bookingId/pay', authMiddleware, async (req, res) => {
                     <p style="font-size: 12px; color: #666;">Đây là email tự động, vui lòng không phản hồi.</p>
                 </div>
             `,
-            attachments: [
-                {
-                    filename: `VeXe_BlueBus_${booking.maVe}.pdf`,
-                    content: pdfBuffer,
-                    contentType: 'application/pdf'
-                }
-            ]
-        });
+        attachments: [
+          {
+            filename: `VeXe_BlueBus_${booking.maVe}.pdf`,
+            content: pdfBuffer,
+            contentType: 'application/pdf'
+          }
+        ]
+      });
     } catch (emailErr) {
-        console.error('Lỗi tạo PDF hoặc gửi email xác nhận:', emailErr);
+      console.error('Lỗi tạo PDF hoặc gửi email xác nhận:', emailErr);
     }
 
     // ✅ EMIT SOCKET payment_confirmed để FE redirect ngay lập tức
@@ -782,12 +782,12 @@ const confirmMiddleware = async (req, res, next) => {
     const jwt = require('jsonwebtoken');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
-    
+
     // Kiểm tra role admin từ token hoặc kiểm tra xem có phải NhanVien không
     const NhanVien = require('../models/NhanVien');
     const isAdmin = await NhanVien.exists({ _id: decoded.id });
     req.isAdmin = !!isAdmin || decoded.role === 'admin';
-    
+
     next();
   } catch (err) {
     return res.status(401).json({ message: 'Token không hợp lệ hoặc đã hết hạn' });
@@ -828,17 +828,17 @@ router.post('/:bookingId/confirm', confirmMiddleware, async (req, res) => {
 
     // Tăng lượt sử dụng voucher nếu có (nếu chưa tăng ở bước pay)
     if (booking.voucherId) {
-        const v = await Voucher.findById(booking.voucherId);
-        if (v) {
-            // Kiểm tra xem vé này đã được tính vào daSuDung chưa? 
-            // Ở đây ta đơn giản là tăng nếu chuyển từ trạng thái chưa thanh toán sang đã thanh toán.
-            // Tuy nhiên, logic chuẩn hơn là kiểm tra xem status cũ là gì.
-            // Trong project này, confirm thường gọi sau khi đã paid, nhưng cũng có thể gọi trực tiếp từ pending.
-            if (['pending', 'hold'].includes(oldStatus)) {
-                v.daSuDung += 1;
-                await v.save();
-            }
+      const v = await Voucher.findById(booking.voucherId);
+      if (v) {
+        // Kiểm tra xem vé này đã được tính vào daSuDung chưa? 
+        // Ở đây ta đơn giản là tăng nếu chuyển từ trạng thái chưa thanh toán sang đã thanh toán.
+        // Tuy nhiên, logic chuẩn hơn là kiểm tra xem status cũ là gì.
+        // Trong project này, confirm thường gọi sau khi đã paid, nhưng cũng có thể gọi trực tiếp từ pending.
+        if (['pending', 'hold'].includes(oldStatus)) {
+          v.daSuDung += 1;
+          await v.save();
         }
+      }
     }
 
     // Cập nhật hóa đơn liên quan
@@ -846,10 +846,10 @@ router.post('/:bookingId/confirm', confirmMiddleware, async (req, res) => {
 
     // ✅ GỬI EMAIL XÁC NHẬN (Ngay sau khi Admin hoặc Webhook xác nhận)
     try {
-        await sendEmail({
-            email: booking.email,
-            subject: `[BlueBus] Xác nhận vé xe thành công - Mã vé: ${booking.maVe}`,
-            html: `
+      await sendEmail({
+        email: booking.email,
+        subject: `[BlueBus] Xác nhận vé xe thành công - Mã vé: ${booking.maVe}`,
+        html: `
                 <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; border: 1px solid #ef5222; padding: 0; border-radius: 15px; max-width: 500px; margin: auto; overflow: hidden; background-color: #fff;">
                     <div style="background-color: #ef5222; color: white; padding: 20px; text-align: center;">
                         <h1 style="margin: 0; font-size: 24px;">BLUE BUS</h1>
@@ -872,9 +872,9 @@ router.post('/:bookingId/confirm', confirmMiddleware, async (req, res) => {
                     </div>
                 </div>
             `
-        });
+      });
     } catch (err) {
-        console.error('Lỗi gửi mail xác nhận sau confirm:', err);
+      console.error('Lỗi gửi mail xác nhận sau confirm:', err);
     }
 
     res.json({
@@ -956,8 +956,8 @@ router.post('/:id/cancel', authMiddleware, async (req, res) => {
 
   try {
     const rawLyDo = req.body.lyDoHuy || req.body.reason || req.body.lyDo || req.body.cancelReason || req.body.ghiChu;
-    const lyDoHuy = (rawLyDo && typeof rawLyDo === 'string' && rawLyDo.trim().length >= 5) 
-      ? rawLyDo.trim() 
+    const lyDoHuy = (rawLyDo && typeof rawLyDo === 'string' && rawLyDo.trim().length >= 5)
+      ? rawLyDo.trim()
       : 'Khách hàng chủ động hủy';
     booking = await findBooking(req.params.id);
     if (!booking) return res.status(404).json({ message: 'Không tìm thấy vé' });
@@ -968,19 +968,19 @@ router.post('/:id/cancel', authMiddleware, async (req, res) => {
 
     // 1. Không thể hủy vé đã hoàn thành (đã đi) hoặc đã hoàn tiền hoặc đã hủy trước đó
     if (booking.trangThai === 'completed') {
-        const errMsg = 'Vé đã được sử dụng (Hoàn thành), không thể hủy.';
-        await sendFailureEmail(booking, errMsg);
-        return res.status(400).json({ message: errMsg });
+      const errMsg = 'Vé đã được sử dụng (Hoàn thành), không thể hủy.';
+      await sendFailureEmail(booking, errMsg);
+      return res.status(400).json({ message: errMsg });
     }
     if (booking.trangThai === 'refunded') {
-        const errMsg = 'Vé đã được hoàn tiền trước đó.';
-        await sendFailureEmail(booking, errMsg);
-        return res.status(400).json({ message: errMsg });
+      const errMsg = 'Vé đã được hoàn tiền trước đó.';
+      await sendFailureEmail(booking, errMsg);
+      return res.status(400).json({ message: errMsg });
     }
     if (booking.trangThai === 'cancelled') {
-        const errMsg = 'Vé này đã được hủy rồi.';
-        await sendFailureEmail(booking, errMsg);
-        return res.status(400).json({ message: errMsg });
+      const errMsg = 'Vé này đã được hủy rồi.';
+      await sendFailureEmail(booking, errMsg);
+      return res.status(400).json({ message: errMsg });
     }
 
     const trip = await ChuyenXe.findById(booking.chuyenXeId);
@@ -988,20 +988,20 @@ router.post('/:id/cancel', authMiddleware, async (req, res) => {
 
     const now = new Date();
     const departureTime = new Date(trip.thoiGianKhoiHanh);
-    
+
     // 2. Không thể hủy vé nếu chuyến xe đã khởi hành
     if (now >= departureTime) {
-        const errMsg = 'Chuyến xe đã khởi hành, không thể hủy vé.';
-        await sendFailureEmail(booking, errMsg);
-        return res.status(400).json({ message: errMsg });
+      const errMsg = 'Chuyến xe đã khởi hành, không thể hủy vé.';
+      await sendFailureEmail(booking, errMsg);
+      return res.status(400).json({ message: errMsg });
     }
 
     // 3. Quy tắc 2 tiếng: Phải hủy trước giờ khởi hành ít nhất 120 phút
     const diffInMinutes = (departureTime - now) / (1000 * 60);
     if (diffInMinutes < 120) {
-        const errMsg = 'Phải thực hiện hủy vé trước ít nhất 2 tiếng trước giờ khởi hành. Vui lòng liên hệ hotline để được hỗ trợ.';
-        await sendFailureEmail(booking, errMsg);
-        return res.status(400).json({ message: errMsg });
+      const errMsg = 'Phải thực hiện hủy vé trước ít nhất 2 tiếng trước giờ khởi hành. Vui lòng liên hệ hotline để được hỗ trợ.';
+      await sendFailureEmail(booking, errMsg);
+      return res.status(400).json({ message: errMsg });
     }
 
     // 4. Bắt buộc cung cấp lý do hủy vé hợp lệ
@@ -1009,9 +1009,9 @@ router.post('/:id/cancel', authMiddleware, async (req, res) => {
 
     // ✅ Nếu thỏa mãn các điều kiện trên -> Thực hiện hủy và giải phóng ghế
     const updatedTrip = await ChuyenXe.findByIdAndUpdate(
-        booking.chuyenXeId,
-        { $pull: { gheDaDat: { $in: booking.danhSachGhe } } },
-        { new: true }
+      booking.chuyenXeId,
+      { $pull: { gheDaDat: { $in: booking.danhSachGhe } } },
+      { new: true }
     );
 
     booking.trangThai = 'cancelled';
@@ -1024,10 +1024,10 @@ router.post('/:id/cancel', authMiddleware, async (req, res) => {
 
     // ✅ GỬI EMAIL THÔNG BÁO HỦY THÀNH CÔNG VỚI TEMPLATE CHUYÊN NGHIỆP
     try {
-        await sendEmail({
-            email: booking.email,
-            subject: `[BlueBus] Thông báo hủy vé thành công - Mã vé: ${booking.maVe}`,
-            html: `
+      await sendEmail({
+        email: booking.email,
+        subject: `[BlueBus] Thông báo hủy vé thành công - Mã vé: ${booking.maVe}`,
+        html: `
                 <div style="font-family: Arial, sans-serif; border: 1px solid #ef5222; padding: 20px; border-radius: 10px; max-width: 600px; margin: auto;">
                     <h2 style="color: #ef5222; text-align: center;">HỦY VÉ THÀNH CÔNG</h2>
                     <p>Chào <b>${booking.hoTen}</b>,</p>
@@ -1041,31 +1041,31 @@ router.post('/:id/cancel', authMiddleware, async (req, res) => {
                     <p>Cảm ơn bạn đã đồng hành cùng BlueBus. Rất mong được phục vụ quý khách trong những hành trình tiếp theo!</p>
                 </div>
             `
-        });
+      });
     } catch (err) {
-        console.error('Lỗi gửi mail hủy thành công:', err);
+      console.error('Lỗi gửi mail hủy thành công:', err);
     }
 
     // ✅ TẠO THÔNG BÁO CHO ADMIN khi khách hủy vé thành công
     try {
-        const thongBao = new ThongBao({
-            tieuDe: `Khách hủy vé ${booking.maVe}`,
-            noiDung: `${booking.hoTen} vừa hủy vé ${booking.maVe}. Lý do: ${lyDoHuy}. Ghế trả lại: ${booking.danhSachGhe.join(', ')}.`,
-            loai: 'cancel',
-            sender: booking.hoTen,
-            isAdminOnly: true,
-            metadata: {
-                maVe: booking.maVe,
-                bookingId: booking._id,
-                lyDoHuy,
-                gheTraLai: booking.danhSachGhe,
-                link: '/admin/ve'
-            }
-        });
-        await thongBao.save();
-        console.log(`[NOTIFY] Đã tạo thông báo admin cho vé hủy: ${booking.maVe}`);
+      const thongBao = new ThongBao({
+        tieuDe: `Khách hủy vé ${booking.maVe}`,
+        noiDung: `${booking.hoTen} vừa hủy vé ${booking.maVe}. Lý do: ${lyDoHuy}. Ghế trả lại: ${booking.danhSachGhe.join(', ')}.`,
+        loai: 'cancel',
+        sender: booking.hoTen,
+        isAdminOnly: true,
+        metadata: {
+          maVe: booking.maVe,
+          bookingId: booking._id,
+          lyDoHuy,
+          gheTraLai: booking.danhSachGhe,
+          link: '/admin/ve'
+        }
+      });
+      await thongBao.save();
+      console.log(`[NOTIFY] Đã tạo thông báo admin cho vé hủy: ${booking.maVe}`);
     } catch (notifyErr) {
-        console.error('Lỗi tạo thông báo admin khi hủy vé:', notifyErr);
+      console.error('Lỗi tạo thông báo admin khi hủy vé:', notifyErr);
     }
 
     // ✅ EMIT EVENT booking_cancelled VIA SOCKET (kèm đầy đủ thông tin để FE hiển thị toast)
@@ -1105,111 +1105,111 @@ router.post('/:id/cancel', authMiddleware, async (req, res) => {
 // @desc    Tải vé điện tử (PDF) - PHIÊN BẢN PREMIUM CÓ QR
 // ============================================================
 router.get('/:bookingId/pdf', async (req, res) => {
-    try {
-        const PDFDocument = require('pdfkit');
-        const QRCode = require('qrcode');
-        
-        const booking = await findBooking(req.params.bookingId).populate({
-            path: 'chuyenXeId',
-            populate: [
-                { path: 'tuyenXeId' },
-                { path: 'xeId' }
-            ]
-        }).populate('diemDon diemTra');
+  try {
+    const PDFDocument = require('pdfkit');
+    const QRCode = require('qrcode');
 
-        if (!booking) return res.status(404).json({ message: 'Không tìm thấy vé' });
+    const booking = await findBooking(req.params.bookingId).populate({
+      path: 'chuyenXeId',
+      populate: [
+        { path: 'tuyenXeId' },
+        { path: 'xeId' }
+      ]
+    }).populate('diemDon diemTra');
 
-        const doc = new PDFDocument({ size: 'A4', margin: 40 }); // Đổi sang A4 cho rộng rãi, đẹp
-        
-        res.setHeader('Content-Disposition', `attachment; filename=Ve_BlueBus_${booking.maVe}.pdf`);
-        res.setHeader('Content-Type', 'application/pdf');
+    if (!booking) return res.status(404).json({ message: 'Không tìm thấy vé' });
 
-        doc.pipe(res);
+    const doc = new PDFDocument({ size: 'A4', margin: 40 }); // Đổi sang A4 cho rộng rãi, đẹp
 
-        // Font Tiếng Việt
-        const fontPath = 'C:\\Windows\\Fonts\\arial.ttf';
-        const fontBoldPath = 'C:\\Windows\\Fonts\\arialbd.ttf';
-        doc.font(fontPath);
+    res.setHeader('Content-Disposition', `attachment; filename=Ve_BlueBus_${booking.maVe}.pdf`);
+    res.setHeader('Content-Type', 'application/pdf');
 
-        // --- BACKGROUND & BORDER ---
-        doc.rect(20, 20, 555, 700).lineWidth(1).strokeColor('#eee').stroke();
+    doc.pipe(res);
 
-        // --- HEADER ---
-        doc.fillColor('#ef5222').font(fontBoldPath).fontSize(30).text('BLUE BUS', { align: 'center' });
-        doc.fillColor('#666').font(fontPath).fontSize(10).text('HỆ THỐNG ĐẶT VÉ XE KHÁCH CHẤT LƯỢNG CAO', { align: 'center' });
-        doc.moveDown();
-        
-        doc.strokeColor('#ef5222').lineWidth(2).moveTo(40, doc.y).lineTo(555, doc.y).stroke();
-        doc.moveDown();
+    // Font Tiếng Việt
+    const fontPath = 'C:\\Windows\\Fonts\\arial.ttf';
+    const fontBoldPath = 'C:\\Windows\\Fonts\\arialbd.ttf';
+    doc.font(fontPath);
 
-        // --- THÔNG TIN MUA VÉ ---
-        doc.fillColor('#333').font(fontBoldPath).fontSize(16).text('THÔNG TIN VÉ XE', { align: 'center' });
-        doc.moveDown();
+    // --- BACKGROUND & BORDER ---
+    doc.rect(20, 20, 555, 700).lineWidth(1).strokeColor('#eee').stroke();
 
-        // Vẽ khung bo góc cho phần mã QR (giả lập Card)
-        const startY = doc.y;
-        doc.roundedRect(150, startY, 300, 320, 10).lineWidth(0.5).strokeColor('#ddd').stroke();
+    // --- HEADER ---
+    doc.fillColor('#ef5222').font(fontBoldPath).fontSize(30).text('BLUE BUS', { align: 'center' });
+    doc.fillColor('#666').font(fontPath).fontSize(10).text('HỆ THỐNG ĐẶT VÉ XE KHÁCH CHẤT LƯỢNG CAO', { align: 'center' });
+    doc.moveDown();
 
-        // Tạo QR Code
-        const qrData = `VE:${booking.maVe}|GHE:${booking.danhSachGhe?.join(',')}`;
-        const qrImageBuffer = await QRCode.toBuffer(qrData, { 
-            errorCorrectionLevel: 'H',
-            margin: 1,
-            width: 150,
-            color: { dark: '#000000', light: '#ffffff' }
-        });
-        
-        doc.image(qrImageBuffer, 225, startY + 20, { width: 150 });
-        
-        doc.fillColor('#000').fontSize(14).text(`Mã vé: ${booking.maVe}`, 200, startY + 180, { align: 'center', width: 200 });
-        doc.fillColor('#ef5222').fontSize(16).text(`Số ghế: ${booking.danhSachGhe?.join(', ')}`, 200, startY + 210, { align: 'center', width: 200 });
+    doc.strokeColor('#ef5222').lineWidth(2).moveTo(40, doc.y).lineTo(555, doc.y).stroke();
+    doc.moveDown();
 
-        // --- CHI TIẾT LỘ TRÌNH ---
-        doc.fillColor('#444').font(fontPath).fontSize(11);
-        let currentY = startY + 250;
-        
-        doc.font(fontBoldPath).text('Hành khách:', 170, currentY);
-        doc.font(fontPath).text(booking.hoTen, 250, currentY);
-        
-        currentY += 20;
-        doc.font(fontBoldPath).text('Tuyến xe:', 170, currentY);
-        doc.font(fontPath).text(`${booking.chuyenXeId?.tuyenXeId?.diemDi} -> ${booking.chuyenXeId?.tuyenXeId?.diemDen}`, 250, currentY);
+    // --- THÔNG TIN MUA VÉ ---
+    doc.fillColor('#333').font(fontBoldPath).fontSize(16).text('THÔNG TIN VÉ XE', { align: 'center' });
+    doc.moveDown();
 
-        currentY += 20;
-        doc.font(fontBoldPath).text('Thời gian:', 170, currentY);
-        doc.font(fontPath).text(new Date(booking.chuyenXeId?.thoiGianKhoiHanh).toLocaleString('vi-VN'), 250, currentY);
+    // Vẽ khung bo góc cho phần mã QR (giả lập Card)
+    const startY = doc.y;
+    doc.roundedRect(150, startY, 300, 320, 10).lineWidth(0.5).strokeColor('#ddd').stroke();
 
-        currentY += 20;
-        doc.font(fontBoldPath).text('Điểm lên:', 170, currentY);
-        const pickupStr = `${booking.diemDon?.tenDiem || 'Tại bến'} ${booking.diemDon?.diaChi ? '(' + booking.diemDon.diaChi + ')' : ''}`;
-        doc.font(fontPath).text(pickupStr, 250, currentY, { width: 250 });
+    // Tạo QR Code
+    const qrData = `VE:${booking.maVe}|GHE:${booking.danhSachGhe?.join(',')}`;
+    const qrImageBuffer = await QRCode.toBuffer(qrData, {
+      errorCorrectionLevel: 'H',
+      margin: 1,
+      width: 150,
+      color: { dark: '#000000', light: '#ffffff' }
+    });
 
-        currentY += 30;
-        doc.font(fontBoldPath).text('Điểm xuống:', 170, currentY);
-        const dropoffStr = `${booking.diemTra?.tenDiem || 'Tại bến'} ${booking.diemTra?.diaChi ? '(' + booking.diemTra.diaChi + ')' : ''}`;
-        doc.font(fontPath).text(dropoffStr, 250, currentY, { width: 250 });
+    doc.image(qrImageBuffer, 225, startY + 20, { width: 150 });
 
-        // --- PHẦN LƯU Ý ---
-        doc.moveDown(12);
-        doc.strokeColor('#eee').lineWidth(1).moveTo(40, doc.y).lineTo(555, doc.y).stroke();
-        doc.moveDown();
-        
-        doc.fillColor('#f00').font(fontBoldPath).fontSize(10).text('LƯU Ý QUAN TRỌNG:', { align: 'left' });
-        doc.fillColor('#666').font(fontPath).fontSize(9);
-        doc.text('- Vui lòng mang mã vé đến văn phòng để đổi vé lên xe trước ít nhất 60 phút.');
-        doc.text('- Thông tin hành khách phải chính xác, nếu không sẽ không thể lên xe.');
-        doc.text('- Vé đã thanh toán không được hoàn trả sau giờ khởi hành.');
+    doc.fillColor('#000').fontSize(14).text(`Mã vé: ${booking.maVe}`, 200, startY + 180, { align: 'center', width: 200 });
+    doc.fillColor('#ef5222').fontSize(16).text(`Số ghế: ${booking.danhSachGhe?.join(', ')}`, 200, startY + 210, { align: 'center', width: 200 });
 
-        // Footer
-        doc.moveDown(2);
-        doc.moveDown(2);
-        doc.fillColor('#999').fontSize(8).text('CÔNG TY CỔ PHẦN XE KHÁCH BLUEBUS - HÂN HẠNH PHỤC VỤ QUÝ KHÁCH', { align: 'center' });
+    // --- CHI TIẾT LỘ TRÌNH ---
+    doc.fillColor('#444').font(fontPath).fontSize(11);
+    let currentY = startY + 250;
 
-        doc.end();
-    } catch (err) {
-        console.error('Lỗi tạo PDF Premium:', err);
-        res.status(500).json({ message: 'Lỗi khi tạo file PDF', error: err.message });
-    }
+    doc.font(fontBoldPath).text('Hành khách:', 170, currentY);
+    doc.font(fontPath).text(booking.hoTen, 250, currentY);
+
+    currentY += 20;
+    doc.font(fontBoldPath).text('Tuyến xe:', 170, currentY);
+    doc.font(fontPath).text(`${booking.chuyenXeId?.tuyenXeId?.diemDi} -> ${booking.chuyenXeId?.tuyenXeId?.diemDen}`, 250, currentY);
+
+    currentY += 20;
+    doc.font(fontBoldPath).text('Thời gian:', 170, currentY);
+    doc.font(fontPath).text(new Date(booking.chuyenXeId?.thoiGianKhoiHanh).toLocaleString('vi-VN'), 250, currentY);
+
+    currentY += 20;
+    doc.font(fontBoldPath).text('Điểm lên:', 170, currentY);
+    const pickupStr = `${booking.diemDon?.tenDiem || 'Tại bến'} ${booking.diemDon?.diaChi ? '(' + booking.diemDon.diaChi + ')' : ''}`;
+    doc.font(fontPath).text(pickupStr, 250, currentY, { width: 250 });
+
+    currentY += 30;
+    doc.font(fontBoldPath).text('Điểm xuống:', 170, currentY);
+    const dropoffStr = `${booking.diemTra?.tenDiem || 'Tại bến'} ${booking.diemTra?.diaChi ? '(' + booking.diemTra.diaChi + ')' : ''}`;
+    doc.font(fontPath).text(dropoffStr, 250, currentY, { width: 250 });
+
+    // --- PHẦN LƯU Ý ---
+    doc.moveDown(12);
+    doc.strokeColor('#eee').lineWidth(1).moveTo(40, doc.y).lineTo(555, doc.y).stroke();
+    doc.moveDown();
+
+    doc.fillColor('#f00').font(fontBoldPath).fontSize(10).text('LƯU Ý QUAN TRỌNG:', { align: 'left' });
+    doc.fillColor('#666').font(fontPath).fontSize(9);
+    doc.text('- Vui lòng mang mã vé đến văn phòng để đổi vé lên xe trước ít nhất 60 phút.');
+    doc.text('- Thông tin hành khách phải chính xác, nếu không sẽ không thể lên xe.');
+    doc.text('- Vé đã thanh toán không được hoàn trả sau giờ khởi hành.');
+
+    // Footer
+    doc.moveDown(2);
+    doc.moveDown(2);
+    doc.fillColor('#999').fontSize(8).text('CÔNG TY CỔ PHẦN XE KHÁCH BLUEBUS - HÂN HẠNH PHỤC VỤ QUÝ KHÁCH', { align: 'center' });
+
+    doc.end();
+  } catch (err) {
+    console.error('Lỗi tạo PDF Premium:', err);
+    res.status(500).json({ message: 'Lỗi khi tạo file PDF', error: err.message });
+  }
 });
 
 // ============================================================
@@ -1217,92 +1217,92 @@ router.get('/:bookingId/pdf', async (req, res) => {
 // @desc    Xác thực hóa đơn (Dành cho trang Kiểm tra hóa đơn)
 // ============================================================
 router.post('/verify-invoice', async (req, res) => {
+  try {
+    const { maVe, captchaInput, captchaToken } = req.query; // Hoặc req.body tùy FE
+
+    // 1. Kiểm tra Captcha
+    const jwt = require('jsonwebtoken');
     try {
-        const { maVe, captchaInput, captchaToken } = req.query; // Hoặc req.body tùy FE
-
-        // 1. Kiểm tra Captcha
-        const jwt = require('jsonwebtoken');
-        try {
-            const decoded = jwt.verify(captchaToken, process.env.JWT_SECRET);
-            if (decoded.code !== captchaInput?.toUpperCase()) {
-                return res.status(400).json({ valid: false, message: 'Mã Captcha không chính xác!' });
-            }
-        } catch (err) {
-            return res.status(400).json({ valid: false, message: 'Mã Captcha đã hết hạn, vui lòng làm mới!' });
-        }
-
-        // 2. Kiểm tra Vé trong Database
-        const booking = await Ve.findOne({ maVe: maVe })
-            .populate({
-                path: 'chuyenXeId',
-                populate: { path: 'tuyenXeId' }
-            });
-
-        if (!booking) {
-            return res.status(404).json({ valid: false, message: 'Không tìm thấy hóa đơn này trên hệ thống!' });
-        }
-
-        if (booking.trangThai !== 'paid' && booking.trangThai !== 'confirmed') {
-            return res.status(400).json({ valid: false, message: 'Hóa đơn này chưa được thanh toán hoặc không hợp lệ!' });
-        }
-
-        // 3. Trả về kết quả Xanh
-        res.json({
-            valid: true,
-            message: 'XÁC THỰC THÀNH CÔNG: Hóa đơn này là thật và đã được thanh toán.',
-            details: {
-                hoTen: booking.hoTen,
-                tuyen: `${booking.chuyenXeId?.tuyenXeId?.diemDi} ➔ ${booking.chuyenXeId?.tuyenXeId?.diemDen}`,
-                ngayDi: booking.chuyenXeId?.thoiGianKhoiHanh,
-                tongTien: booking.tongTien
-            }
-        });
+      const decoded = jwt.verify(captchaToken, process.env.JWT_SECRET);
+      if (decoded.code !== captchaInput?.toUpperCase()) {
+        return res.status(400).json({ valid: false, message: 'Mã Captcha không chính xác!' });
+      }
     } catch (err) {
-        res.status(500).json({ message: 'Lỗi hệ thống xác thực', error: err.message });
+      return res.status(400).json({ valid: false, message: 'Mã Captcha đã hết hạn, vui lòng làm mới!' });
     }
+
+    // 2. Kiểm tra Vé trong Database
+    const booking = await Ve.findOne({ maVe: maVe })
+      .populate({
+        path: 'chuyenXeId',
+        populate: { path: 'tuyenXeId' }
+      });
+
+    if (!booking) {
+      return res.status(404).json({ valid: false, message: 'Không tìm thấy hóa đơn này trên hệ thống!' });
+    }
+
+    if (booking.trangThai !== 'paid' && booking.trangThai !== 'confirmed') {
+      return res.status(400).json({ valid: false, message: 'Hóa đơn này chưa được thanh toán hoặc không hợp lệ!' });
+    }
+
+    // 3. Trả về kết quả Xanh
+    res.json({
+      valid: true,
+      message: 'XÁC THỰC THÀNH CÔNG: Hóa đơn này là thật và đã được thanh toán.',
+      details: {
+        hoTen: booking.hoTen,
+        tuyen: `${booking.chuyenXeId?.tuyenXeId?.diemDi} ➔ ${booking.chuyenXeId?.tuyenXeId?.diemDen}`,
+        ngayDi: booking.chuyenXeId?.thoiGianKhoiHanh,
+        tongTien: booking.tongTien
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi hệ thống xác thực', error: err.message });
+  }
 });
 
 // @route   PATCH /api/bookings/:id/apply-voucher
 // @desc    Cập nhật mã giảm giá cho một vé đang chờ thanh toán
 router.patch('/:id/apply-voucher', async (req, res) => {
-    try {
-        const { maVoucher } = req.body;
-        const booking = await Ve.findById(req.params.id);
-        
-        if (!booking) return res.status(404).json({ message: 'Không tìm thấy vé' });
-        if (booking.trangThai !== 'hold') return res.status(400).json({ message: 'Vé đã được thanh toán hoặc đã hủy, không thể áp mã' });
+  try {
+    const { maVoucher } = req.body;
+    const booking = await Ve.findById(req.params.id);
 
-        const voucher = await Voucher.findOne({ maVoucher: maVoucher.toUpperCase(), trangThai: 'active' });
-        if (!voucher) return res.status(404).json({ message: 'Mã giảm giá không tồn tại hoặc đã hết hạn' });
+    if (!booking) return res.status(404).json({ message: 'Không tìm thấy vé' });
+    if (booking.trangThai !== 'hold') return res.status(400).json({ message: 'Vé đã được thanh toán hoặc đã hủy, không thể áp mã' });
 
-        // Logic tính toán lại (Đồng bộ với logic hold-seats)
-        const trip = await ChuyenXe.findById(booking.chuyenXeId).populate('tuyenXeId');
-        const giaVeNum = parseInt(trip.tuyenXeId.giaVe.replace(/\D/g, '')) || 0;
-        const tongTienGoc = giaVeNum * booking.danhSachGhe.length;
+    const voucher = await Voucher.findOne({ maVoucher: maVoucher.toUpperCase(), trangThai: 'active' });
+    if (!voucher) return res.status(404).json({ message: 'Mã giảm giá không tồn tại hoặc đã hết hạn' });
 
-        let soTienGiam = 0;
-        if (voucher.loaiGiamGia === 'fixed') {
-            soTienGiam = voucher.giaTriGiam;
-        } else {
-            soTienGiam = (tongTienGoc * voucher.giaTriGiam) / 100;
-            if (voucher.giamToiDa && soTienGiam > voucher.giamToiDa) soTienGiam = voucher.giamToiDa;
-        }
+    // Logic tính toán lại (Đồng bộ với logic hold-seats)
+    const trip = await ChuyenXe.findById(booking.chuyenXeId).populate('tuyenXeId');
+    const giaVeNum = parseInt(trip.tuyenXeId.giaVe.replace(/\D/g, '')) || 0;
+    const tongTienGoc = giaVeNum * booking.danhSachGhe.length;
 
-        booking.soTienGiam = soTienGiam;
-        booking.tongTien = tongTienGoc - soTienGiam;
-        booking.maVoucher = voucher.maVoucher;
-        booking.voucherId = voucher._id;
-
-        await booking.save();
-
-        res.json({ 
-            message: 'Áp dụng mã giảm giá thành công', 
-            tongTien: booking.tongTien, 
-            soTienGiam: booking.soTienGiam 
-        });
-    } catch (err) {
-        res.status(500).json({ message: 'Lỗi khi áp dụng mã giảm giá', error: err.message });
+    let soTienGiam = 0;
+    if (voucher.loaiGiamGia === 'fixed') {
+      soTienGiam = voucher.giaTriGiam;
+    } else {
+      soTienGiam = (tongTienGoc * voucher.giaTriGiam) / 100;
+      if (voucher.giamToiDa && soTienGiam > voucher.giamToiDa) soTienGiam = voucher.giamToiDa;
     }
+
+    booking.soTienGiam = soTienGiam;
+    booking.tongTien = tongTienGoc - soTienGiam;
+    booking.maVoucher = voucher.maVoucher;
+    booking.voucherId = voucher._id;
+
+    await booking.save();
+
+    res.json({
+      message: 'Áp dụng mã giảm giá thành công',
+      tongTien: booking.tongTien,
+      soTienGiam: booking.soTienGiam
+    });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi khi áp dụng mã giảm giá', error: err.message });
+  }
 });
 
 // ============================================================
@@ -1310,31 +1310,31 @@ router.patch('/:id/apply-voucher', async (req, res) => {
 // @desc    Hủy giữ chỗ ngay lập tức (khi khách bấm quay lại hoặc thoát trang)
 // ============================================================
 router.post('/:id/cancel-hold', authMiddleware, async (req, res) => {
-    try {
-        const booking = await Ve.findOne({ _id: req.params.id, khachHangId: req.user._id });
-        
-        if (!booking) {
-            return res.status(404).json({ message: 'Không tìm thấy vé' });
-        }
+  try {
+    const booking = await Ve.findOne({ _id: req.params.id, khachHangId: req.user._id });
 
-        if (booking.trangThai !== 'hold') {
-            return res.status(400).json({ message: 'Chỉ có thể hủy giữ chỗ cho vé đang ở trạng thái chờ thanh toán' });
-        }
-
-        // Chuyển trạng thái sang expired và giải phóng ghế
-        booking.trangThai = 'expired';
-        booking.holdExpires = undefined;
-        await booking.save();
-
-        await ChuyenXe.findByIdAndUpdate(booking.chuyenXeId, {
-            $pull: { gheDaDat: { $in: booking.danhSachGhe } }
-        });
-
-        console.log(`[CANCEL-HOLD] Đã giải phóng ghế cho vé: ${booking.maVe} theo yêu cầu từ FE`);
-        res.json({ success: true, message: 'Đã hủy giữ chỗ và giải phóng ghế thành công' });
-    } catch (err) {
-        res.status(500).json({ message: 'Lỗi hủy giữ chỗ', error: err.message });
+    if (!booking) {
+      return res.status(404).json({ message: 'Không tìm thấy vé' });
     }
+
+    if (booking.trangThai !== 'hold') {
+      return res.status(400).json({ message: 'Chỉ có thể hủy giữ chỗ cho vé đang ở trạng thái chờ thanh toán' });
+    }
+
+    // Chuyển trạng thái sang expired và giải phóng ghế
+    booking.trangThai = 'expired';
+    booking.holdExpires = undefined;
+    await booking.save();
+
+    await ChuyenXe.findByIdAndUpdate(booking.chuyenXeId, {
+      $pull: { gheDaDat: { $in: booking.danhSachGhe } }
+    });
+
+    console.log(`[CANCEL-HOLD] Đã giải phóng ghế cho vé: ${booking.maVe} theo yêu cầu từ FE`);
+    res.json({ success: true, message: 'Đã hủy giữ chỗ và giải phóng ghế thành công' });
+  } catch (err) {
+    res.status(500).json({ message: 'Lỗi hủy giữ chỗ', error: err.message });
+  }
 });
 
 module.exports = router;

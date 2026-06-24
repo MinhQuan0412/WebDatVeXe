@@ -138,16 +138,19 @@ const DatVe = () => {
     console.log('🚀 [Socket] tripId =', tripId);
     console.log('🚀 [Socket] socket.connected =', socket.connected, '| socket.id =', socket.id);
 
-    // Nếu socket đã connected rồi thì join ngay, không cần chờ event 'connect'
-    if (socket.connected) {
-      socket.emit('joinTripRoom', tripId);
-      console.log('✅ [Socket] Đã joinTripRoom (connected sẵn):', tripId);
-    }
-
     const onConnect = () => {
       console.log('✅ [Socket] onConnect fired, joining room:', tripId);
       Swal.fire({ toast: true, position: 'top-end', icon: 'success', title: `Đã kết nối Socket! (ID: ${socket.id})`, showConfirmButton: false, timer: 3000 });
       socket.emit('joinTripRoom', tripId);
+    };
+
+    const onInitialLockedSeats = (data) => {
+      console.log('🔒 [Socket] initial_locked_seats received:', data);
+      const id = data.chuyenXeId;
+      const seats = data.seats || [];
+      if (id === tripId) {
+        setLockedSeats(prev => [...new Set([...prev, ...seats])]);
+      }
     };
 
     const onSeatLocked = (data) => {
@@ -205,16 +208,25 @@ const DatVe = () => {
       }
     };
 
+    // Đăng ký listeners TRƯỚC KHI emit joinTripRoom để tránh race condition
     socket.on('connect', onConnect);
+    socket.on('initial_locked_seats', onInitialLockedSeats);
     socket.on('seat_locked', onSeatLocked);
     socket.on('seat_released', onSeatReleased);
     socket.on('seatsUpdated', onSeatsUpdated);
     socket.on('booking_cancelled', onBookingCancelled);
 
+    // Nếu socket đã connected rồi thì join ngay sau khi đã đăng ký xong listeners
+    if (socket.connected) {
+      socket.emit('joinTripRoom', tripId);
+      console.log('✅ [Socket] Đã joinTripRoom (connected sẵn):', tripId);
+    }
+
     return () => {
       console.log('🧹 [Socket] cleanup, leaving room:', tripId);
       socket.emit('leaveTripRoom', tripId);
       socket.off('connect', onConnect);
+      socket.off('initial_locked_seats', onInitialLockedSeats);
       socket.off('seat_locked', onSeatLocked);
       socket.off('seat_released', onSeatReleased);
       socket.off('seatsUpdated', onSeatsUpdated);

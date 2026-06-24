@@ -32,7 +32,7 @@ router.post('/send-otp', async (req, res) => {
         // 3. Tạo hoặc cập nhật bản ghi tạm (inactive)
         await KhachHang.findOneAndUpdate(
             { soDienThoai },
-            { 
+            {
                 soDienThoai,
                 otp,
                 otpExpires,
@@ -45,7 +45,7 @@ router.post('/send-otp', async (req, res) => {
 
         console.log(`[AUTH] OTP 123456 prepared for ${soDienThoai}`);
 
-        res.json({ 
+        res.json({
             message: 'Mã xác thực đã được chuẩn bị.',
             note: 'Sử dụng mã 123456 để tiếp tục.'
         });
@@ -172,7 +172,7 @@ router.post('/forgot-password', async (req, res) => {
     try {
         const { soDienThoai } = req.body;
         const user = await KhachHang.findOne({ soDienThoai, trangThai: 'active' });
-        
+
         if (!user) {
             return res.status(404).json({ message: 'Không tìm thấy tài khoản với số điện thoại này.' });
         }
@@ -255,7 +255,7 @@ router.get('/captcha', (req, res) => {
     for (let i = 0; i < 6; i++) {
         captcha += chars[Math.floor(Math.random() * chars.length)];
     }
-    
+
     // Trong thực tế sẽ dùng Session hoặc Redis, ở đây tui trả về kèm token mã hóa đơn giản
     const jwt = require('jsonwebtoken');
     const captchaToken = jwt.sign({ code: captcha }, process.env.JWT_SECRET, { expiresIn: '5m' });
@@ -273,7 +273,7 @@ router.get('/captcha', (req, res) => {
 router.patch('/profile', authMiddleware, async (req, res) => {
     try {
         console.log('[AUTH] Yêu cầu cập nhật Profile cho ID:', req.user.id);
-        
+
         const hoTen = req.body.hoTen || req.body.name || req.body.fullName;
         const email = req.body.email;
         const diaChi = req.body.diaChi || req.body.address;
@@ -282,7 +282,7 @@ router.patch('/profile', authMiddleware, async (req, res) => {
         const ngheNghiep = req.body.ngheNghiep || req.body.job || req.body.occupation;
 
         let user = await KhachHang.findById(req.user.id);
-        
+
         if (!user) return res.status(404).json({ message: 'Không tìm thấy tài khoản khách hàng' });
 
         // Kiểm tra email trùng
@@ -295,7 +295,7 @@ router.patch('/profile', authMiddleware, async (req, res) => {
         if (hoTen) user.hoTen = hoTen;
         if (diaChi) user.diaChi = diaChi;
         if (gioiTinh) user.gioiTinh = gioiTinh.toLowerCase();
-        
+
         // Xử lý ngày sinh (Tránh lỗi định dạng ngày)
         if (ngaySinh) {
             const date = new Date(ngaySinh);
@@ -303,12 +303,12 @@ router.patch('/profile', authMiddleware, async (req, res) => {
                 user.ngaySinh = date;
             }
         }
-        
+
         if (ngheNghiep) user.ngheNghiep = ngheNghiep;
 
         await user.save();
         console.log('[AUTH] Cập nhật Profile thành công cho:', user.email || user.soDienThoai);
-        
+
         res.json({ message: 'Cập nhật thông tin thành công', user });
     } catch (err) {
         console.error('[AUTH] Lỗi cập nhật Profile:', err);
@@ -323,7 +323,7 @@ router.patch('/profile', authMiddleware, async (req, res) => {
 router.patch('/change-password', authMiddleware, async (req, res) => {
     try {
         console.log('[AUTH] Yêu cầu đổi mật khẩu:', JSON.stringify(req.body));
-        
+
         const oldPassword = req.body.oldPassword || req.body.matKhauCu || req.body.currentPassword || req.body.password;
         const newPassword = req.body.newPassword || req.body.matKhauMoi || req.body.new_password;
         const confirmNewPassword = req.body.confirmNewPassword || req.body.xacNhanMatKhauMoi || req.body.xacNhanMatKhau || req.body.confirmPassword;
@@ -365,7 +365,7 @@ router.patch('/change-password', authMiddleware, async (req, res) => {
 router.post('/support-requests', async (req, res) => {
     try {
         const { hoTen, email, soDienThoai, tieuDe, noiDung } = req.body;
-        
+
         const SupportTicket = require('../models/SupportTicket');
         const newTicket = new SupportTicket({
             hoTen,
@@ -386,7 +386,7 @@ router.post('/support-requests', async (req, res) => {
                 loai: 'support',
                 sender: hoTen,
                 isAdminOnly: true,
-                metadata: { 
+                metadata: {
                     requestId: newTicket._id,
                     link: '/admin/ho-tro' // Đường dẫn chính xác cho FE
                 }

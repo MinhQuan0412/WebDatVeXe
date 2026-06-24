@@ -3,6 +3,14 @@ import './LichTrinh.css';
 import { FaSearch, FaExchangeAlt, FaBus } from 'react-icons/fa';
 import bookingApi from '../../api/bookingApi';
 
+// Chuẩn hoá hiển thị thời gian hành trình: luôn kèm "tiếng"
+const formatThoiGian = (val) => {
+  if (!val && val !== 0) return '—';
+  const str = String(val).trim();
+  if (str.toLowerCase().includes('tiếng') || str.toLowerCase().includes('giờ')) return str;
+  return `${str} tiếng`;
+};
+
 const LichTrinh = () => {
   const [routes, setRoutes] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -96,7 +104,7 @@ const LichTrinh = () => {
                   </div>
                   <div className="col-type">{route.loaiXe || 'Limousine'}</div>
                   <div className="col-dist">{route.khoangCach}</div>
-                  <div className="col-time">{route.thoiGian || route.thoiGianDi}</div>
+                  <div className="col-time">{formatThoiGian(route.thoiGian || route.thoiGianDi)}</div>
                   <div className="col-price route-price-cell">{Number(String(route.giaVe || 0).replace(/[^0-9]/g, '')).toLocaleString('vi-VN')} đ</div>
                 </div>
               ))}

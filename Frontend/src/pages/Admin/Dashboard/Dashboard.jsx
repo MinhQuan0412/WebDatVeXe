@@ -106,6 +106,13 @@ const Dashboard = () => {
           </div>
         </div>
         <div className="w-stat-card">
+          <div className="w-stat-icon" style={{ background: '#fef3c7', color: '#d97706' }}><FaMoneyBillWave /></div>
+          <div className="w-stat-content">
+            <p className="w-stat-title">Doanh thu hôm nay</p>
+            <h3 className="w-stat-value" style={{ fontSize: '18px', color: '#d97706' }}>{formatCurrency(summary?.todayRevenue)}</h3>
+          </div>
+        </div>
+        <div className="w-stat-card">
           <div className="w-stat-icon bg-amber-100 text-amber-600"><FaBus /></div>
           <div className="w-stat-content">
             <p className="w-stat-title">Chuyến xe đang chạy</p>
@@ -125,7 +132,7 @@ const Dashboard = () => {
       <div className="w-grid-2-col">
         <div className="w-card w-chart-card">
           <h3 className="w-card-title">Biểu đồ doanh thu</h3>
-          <p className="w-card-subtitle">Thống kê theo ngày (Đơn vị: Triệu VNĐ)</p>
+          <p className="w-card-subtitle">Doanh thu theo ngày bán vé — 7 ngày gần nhất (Đơn vị: Triệu VNĐ)</p>
           <div className="w-chart-wrapper" style={{ height: 300 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={revenueChartData}>

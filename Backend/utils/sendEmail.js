@@ -1,6 +1,6 @@
 const nodemailer = require('nodemailer');
 
-const sendEmail = async ({ email, subject, html }) => {
+const sendEmail = async ({ email, subject, html, attachments }) => {
   try {
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
@@ -13,8 +13,8 @@ const sendEmail = async ({ email, subject, html }) => {
       tls: {
         rejectUnauthorized: false // Bỏ qua kiểm tra chứng chỉ khắt khe
       },
-      logger: true,
-      debug: true
+      logger: false,
+      debug: false
     });
 
     const mailOptions = {
@@ -22,6 +22,7 @@ const sendEmail = async ({ email, subject, html }) => {
       to: email,
       subject: subject,
       html: html,
+      ...(attachments && attachments.length > 0 && { attachments })
     };
 
     const info = await transporter.sendMail(mailOptions);

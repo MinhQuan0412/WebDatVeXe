@@ -80,7 +80,12 @@ const LichSuDatVe = () => {
 
   const filtered = useMemo(() => {
     return bookings.filter((b) => {
-      const isHistory = b.trangThai === 'cancelled' || b.trangThai === 'inactive' || b.trangThai === 'expired';
+      const departureTime = typeof b.chuyenXeId === 'object' ? b.chuyenXeId?.thoiGianKhoiHanh : null;
+      const isDeparted = departureTime ? new Date(departureTime) < new Date() : false;
+      const isHistory = 
+        ['cancelled', 'inactive', 'expired', 'completed', 'refunded'].includes(b.trangThai) || 
+        isDeparted;
+
       if (activeTab === 'current' && isHistory) return false;
       if (activeTab === 'history' && !isHistory) return false;
 

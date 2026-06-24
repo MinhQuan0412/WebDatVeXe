@@ -1735,19 +1735,40 @@ router.get('/stats/dashboard', adminMiddleware, async (req, res) => {
     const totalRevenue = totalRevenueAggr.length > 0 ? (totalRevenueAggr[0].total || 0) : 0;
     const fillRate = totalCapacityAggr.length > 0 ? ((totalCapacityAggr[0].bookedSeats / totalCapacityAggr[0].totalSeats) * 100).toFixed(1) : 0;
 
-    // 2. Biểu đồ Vé bán & Doanh thu theo ngày (Bar & Line chart - Tính theo số ghế thực tế bán ra)
-    const dailyStats = await Ve.aggregate([
-      { $match: { trangThai: { $in: ['paid', 'confirmed', 'completed'] } } },
-      {
-        $group: {
-          _id: { $dateToString: { format: "%d/%m", date: "$ngayDat", timezone: "Asia/Ho_Chi_Minh" } },
-          revenue: { $sum: '$tongTien' },
-          tickets: { $sum: { $size: '$danhSachGhe' } }
-        }
-      },
-      { $sort: { "_id": 1 } },
-      { $limit: 10 }
+    // 2. Biểu đồ Doanh thu theo ngày BÁN vé (7 ngày gần nhất tính theo ngayDat/createdAt)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const [dailyStats, todayRevenueAggr] = await Promise.all([
+      Ve.aggregate([
+        {
+          $match: {
+            trangThai: { $in: ['paid', 'confirmed', 'completed'] },
+            ngayDat: { $gte: sevenDaysAgo }
+          }
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%d/%m", date: "$ngayDat", timezone: "Asia/Ho_Chi_Minh" } },
+            revenue: { $sum: '$tongTien' },
+            tickets: { $sum: { $size: '$danhSachGhe' } }
+          }
+        },
+        { $sort: { "_id": 1 } }
+      ]),
+      Ve.aggregate([
+        {
+          $match: {
+            trangThai: { $in: ['paid', 'confirmed', 'completed'] },
+            ngayDat: { $gte: today }
+          }
+        },
+        { $group: { _id: null, total: { $sum: '$tongTien' } } }
+      ])
     ]);
+
+    const todayRevenue = todayRevenueAggr.length > 0 ? (todayRevenueAggr[0].total || 0) : 0;
 
     // 3. Thống kê theo Tuyến đường (Dùng tongTien từ Vé để tính doanh thu cho chuẩn, tính số vé theo số lượng ghế)
     const routeStats = await Ve.aggregate([
@@ -1805,6 +1826,7 @@ router.get('/stats/dashboard', adminMiddleware, async (req, res) => {
         totalTickets,
         totalTrips: totalActiveTrips,
         totalRevenue,
+        todayRevenue,
         fillRate: `${fillRate}%`
       },
       dailyStats,

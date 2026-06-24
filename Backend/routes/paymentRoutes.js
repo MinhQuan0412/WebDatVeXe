@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
+const fs = require('fs');
+const path = require('path');
 const Ve = require('../models/Ve');
 const HoaDon = require('../models/HoaDon');
 const ChuyenXe = require('../models/ChuyenXe');
 const sendEmail = require('../utils/sendEmail');
-const generateQR = require('../utils/generateQR');
 
 // ============================================================
 // @route   GET /api/payments/methods
@@ -174,13 +175,37 @@ router.post('/sepay-webhook', async (req, res) => {
 
     // 5. Gửi Email xác nhận kèm mã QR
     try {
-        const trip = booking.chuyenXeId;
+        // Re-populate chuyenXeId để chắc chắn có tuyenXeId
+        const Ve2 = require('../models/Ve');
+        const bookingFull = await Ve2.findById(booking._id).populate({
+            path: 'chuyenXeId',
+            populate: { path: 'tuyenXeId' }
+        });
+        const trip = bookingFull?.chuyenXeId;
+        const tuyen = trip?.tuyenXeId;
+
+        // Lấy email: ưu tiên email trong vé, fallback lấy từ KhachHang
+        let recipientEmail = booking.email || bookingFull?.email;
+        if (!recipientEmail) {
+            const KhachHang = require('../models/KhachHang');
+            const kh = await KhachHang.findById(booking.khachHangId).select('email');
+            recipientEmail = kh?.email;
+        }
+
+        console.log(`[EMAIL] Chuẩn bị gửi email xác nhận đến: ${recipientEmail}, tuyenXeId: ${JSON.stringify(tuyen?._id)}`);
+
+        if (!recipientEmail) {
+            console.warn(`[EMAIL] Vé ${booking.maVe} không có email, bỏ qua gửi thư`);
+            fs.appendFileSync(path.join(__dirname, '../email_debug.log'),
+                `[${new Date().toLocaleString('vi-VN')}] BỎ QUA: Vé ${booking.maVe} không có email\n`);
+        }
+
         // Sử dụng API QR công khai để Gmail có thể hiển thị ảnh trực tiếp (Base64 bị Gmail chặn)
         const qrData = encodeURIComponent(`Mã vé: ${booking.maVe} | Khách: ${booking.hoTen} | Ghế: ${booking.danhSachGhe.join(', ')}`);
         const qrImage = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${qrData}`;
 
-        await sendEmail({
-            email: booking.email,
+        if (recipientEmail) await sendEmail({
+            email: recipientEmail,
             subject: `Xác nhận đặt vé thành công - Mã vé: ${booking.maVe}`,
             html: `
                 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #ddd; padding: 20px; border-radius: 10px;">
@@ -189,7 +214,7 @@ router.post('/sepay-webhook', async (req, res) => {
                     <p>Hệ thống đã nhận được thanh toán của bạn qua SePay. Chúc mừng bạn đã đặt vé thành công!</p>
                     <div style="background: #f9f9f9; padding: 15px; border-radius: 5px;">
                         <p><b>Mã vé:</b> ${booking.maVe}</p>
-                        <p><b>Tuyến:</b> ${trip.tuyenXeId.diemDi} ➔ ${trip.tuyenXeId.diemDen}</p>
+                        <p><b>Tuyến:</b> ${tuyen?.diemDi || '—'} ➔ ${tuyen?.diemDen || '—'}</p>
                         <p><b>Số ghế:</b> ${booking.danhSachGhe.join(', ')}</p>
                         <p><b>Tổng tiền:</b> ${booking.tongTien.toLocaleString()} đ</p>
                         <p><b>Mã giao dịch:</b> ${finalRefCode}</p>
@@ -202,8 +227,32 @@ router.post('/sepay-webhook', async (req, res) => {
                 </div>
             `
         });
+        console.log(`[EMAIL] ✅ Đã gửi email xác nhận đến ${recipientEmail}`);
+        fs.appendFileSync(
+            path.join(__dirname, '../email_debug.log'),
+            `[${new Date().toLocaleString('vi-VN')}] THÀNH CÔNG: Gửi mail thành công cho vé ${booking.maVe} tới ${recipientEmail}\n`
+        );
     } catch (emailErr) {
-        console.error('Lỗi gửi email xác nhận sau webhook:', emailErr);
+        console.error('Lỗi gửi email xác nhận sau webhook:', emailErr.message);
+        fs.appendFileSync(
+            path.join(__dirname, '../email_debug.log'),
+            `[${new Date().toLocaleString('vi-VN')}] THẤT BẠI: Lỗi gửi mail cho vé ${booking?.maVe}: ${emailErr.message}\nStack: ${emailErr.stack}\n`
+        );
+    }
+
+    // 6. Emit socket để FE redirect ngay
+    try {
+        const io = require('../server').io || global.io;
+        if (io) {
+            io.emit('payment_confirmed', {
+                maVe: booking.maVe,
+                bookingId: booking._id,
+                trangThai: 'paid'
+            });
+            console.log(`[SOCKET] Emit payment_confirmed cho vé ${booking.maVe}`);
+        }
+    } catch (socketErr) {
+        // socket không bắt buộc
     }
 
     res.json({ success: true, message: 'Xác nhận thanh toán thành công qua Sepay Webhook' });
